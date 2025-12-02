@@ -25,7 +25,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]  # asegúrate de crearla en Secrets
 
 WARNINGS_FILE = "warnings.json"
 MAX_WARNINGS = 3
-DELETE_AFTER_SECONDS = 300  # 5 minutos
+DELETE_AFTER_SECONDS = 10  # 5 minutos
 # -------------------------------------------
 
 # Inicializar bot
