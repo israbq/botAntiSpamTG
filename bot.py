@@ -15,23 +15,21 @@ from keep_alive import keep_alive
 if os.environ.get("REPL_ID"):
     keep_alive()
 
-
-# Levanta el mini servidor (para Replit/UptimeRobot)
+# Si lo usas también fuera de Replit, esto mantiene vivo el bot
 keep_alive()
 
 # ------------------ CONFIG ------------------
-# IMPORTANTE: el token va en una variable de entorno, NO en el código
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # asegúrate de crearla en Secrets
 
 WARNINGS_FILE = "warnings.json"
 MAX_WARNINGS = 3
-DELETE_AFTER_SECONDS = 120  # 2 minutos
+DELETE_AFTER_SECONDS = 10  # 2 minutos
 # -------------------------------------------
 
 # Inicializar bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Cargar advertencias
+# Cargar advertencias desde archivo
 try:
     with open(WARNINGS_FILE, "r") as f:
         content = f.read().strip()
@@ -39,11 +37,69 @@ try:
 except FileNotFoundError:
     warnings = {}
 
+# Registro de usuarios conocidos por chat
+# key: "chat_id:user_id" -> {"full_name": str, "username": str, "user_id": str}
+known_users = {}
+
 
 def save_warnings():
     """Guarda el diccionario de advertencias en el archivo."""
     with open(WARNINGS_FILE, "w") as f:
         json.dump(warnings, f)
+
+
+def register_user(chat_id: str, user):
+    """
+    Registra/actualiza info básica de un usuario por chat.
+    chat_id: str (id del grupo)
+    user: objeto telegram.User
+    """
+    if user is None:
+        return
+
+    key = f"{chat_id}:{user.id}"
+    full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    username = user.username or ""
+
+    known_users[key] = {
+        "full_name": full_name,
+        "username": username,
+        "user_id": str(user.id),
+    }
+
+
+def find_users_in_chat_by_query(chat_id: str, query: str):
+    """
+    Busca usuarios en ESTE chat cuyo nombre/username coincida con query.
+    Devuelve lista de tuplas (user_id:str, data:dict)
+    """
+    q = (query or "").strip().lstrip("@").lower()
+    matches = []
+
+    if not q:
+        return matches
+
+    for key, data in known_users.items():
+        try:
+            chat_key, user_id = key.split(":")
+        except ValueError:
+            continue
+
+        if chat_key != chat_id:
+            continue
+
+        name = (data.get("full_name") or "").lower()
+        username = (data.get("username") or "").lower()
+        stored_user_id = data.get("user_id") or user_id
+
+        if (
+            q == username
+            or q in name
+            or q == stored_user_id
+        ):
+            matches.append((stored_user_id, data))
+
+    return matches
 
 
 # Regex para enlaces prohibidos
@@ -86,12 +142,46 @@ async def delete_message_later(context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------ COMANDO /warnings ------------------
 async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # /warnings @usuario  |  /warnings nombre
+    """
+    /warnings (como reply)  -> revisa warnings del usuario del mensaje respondido
+    /warnings juanito       -> busca en usuarios conocidos del chat que coincidan con 'juanito'
+    """
     jq = context.application.job_queue
+    chat_id = str(update.effective_chat.id)
+    message = update.message
 
+    # Registrar al que ejecuta el comando
+    if update.effective_user:
+        register_user(chat_id, update.effective_user)
+
+    # CASO A: /warnings sin argumentos pero en reply a un mensaje
+    if (not context.args) and message and message.reply_to_message:
+        target_user = message.reply_to_message.from_user
+        register_user(chat_id, target_user)
+
+        user_id = str(target_user.id)
+        key = f"{chat_id}:{user_id}"
+        current_warnings = warnings.get(key, 0)
+
+        text = (
+            f"{target_user.first_name} lleva "
+            f"{current_warnings}/{MAX_WARNINGS} advertencias."
+        )
+        msg = await message.reply_text(text)
+
+        if jq:
+            jq.run_once(
+                delete_message_later,
+                when=DELETE_AFTER_SECONDS,
+                data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+            )
+        return
+
+    # CASO B: /warnings sin args y sin reply -> explicar uso
     if not context.args:
-        msg = await update.message.reply_text(
-            "Usa: /warnings @usuario o /warnings nombre"
+        msg = await message.reply_text(
+            "Usa /warnings respondiendo al mensaje de alguien,\n"
+            "o /warnings nombre/usuario (ej. /warnings juanito)."
         )
         if jq:
             jq.run_once(
@@ -101,52 +191,14 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         return
 
-    search = " ".join(context.args).lower()
-    chat_id = str(update.effective_chat.id)
+    # CASO C: /warnings juanito (con texto)
+    search = " ".join(context.args)
+    matches = find_users_in_chat_by_query(chat_id, search)
 
-    user_found = False
-
-    for key, value in warnings.items():
-        try:
-            chat_key, user_id = key.split(":")
-        except ValueError:
-            continue
-
-        if chat_key != chat_id:
-            continue
-
-        try:
-            member = await context.bot.get_chat_member(chat_id, user_id)
-        except Exception:
-            continue
-
-        name = f"{member.user.first_name} {member.user.last_name or ''}".strip().lower()
-        username = (member.user.username or "").lower()
-
-        # Coincidencias:
-        # - search == username (sin @)
-        # - search contenido en el nombre
-        # - search == user_id
-        if (
-            search == username
-            or search in name
-            or search == user_id
-        ):
-            msg = await update.message.reply_text(
-                f"{member.user.first_name} lleva {value}/{MAX_WARNINGS} advertencias."
-            )
-            if jq:
-                jq.run_once(
-                    delete_message_later,
-                    when=DELETE_AFTER_SECONDS,
-                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
-                )
-            user_found = True
-            break
-
-    if not user_found:
-        msg = await update.message.reply_text(
-            "Ese usuario no tiene advertencias registradas."
+    # Nadie coincide → no existe “juanito” en el registro del bot
+    if not matches:
+        msg = await message.reply_text(
+            f"No encontré a nadie en este grupo que coincida con “{search}”."
         )
         if jq:
             jq.run_once(
@@ -154,6 +206,57 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
                 when=DELETE_AFTER_SECONDS,
                 data={"chat_id": msg.chat_id, "message_id": msg.message_id},
             )
+        return
+
+    # Varias coincidencias
+    if len(matches) > 1:
+        # Si son demasiados, mejor pedir que acote
+        if len(matches) > 5:
+            msg_text = (
+                f"Encontré varios usuarios que coinciden con “{search}”.\n"
+                "Sé más específico o responde al mensaje de la persona y usa /warnings."
+            )
+        else:
+            lista = []
+            for uid, data in matches:
+                full_name = data.get("full_name") or "(sin nombre)"
+                username = data.get("username")
+                if username:
+                    lista.append(f"- {full_name} (@{username})")
+                else:
+                    lista.append(f"- {full_name}")
+
+            msg_text = (
+                "Encontré varios posibles:\n"
+                + "\n".join(lista)
+                + "\n\nResponde directamente al mensaje de la persona y usa /warnings "
+                  "para ver sus advertencias."
+            )
+
+        msg = await message.reply_text(msg_text)
+        if jq:
+            jq.run_once(
+                delete_message_later,
+                when=DELETE_AFTER_SECONDS,
+                data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+            )
+        return
+
+    # CASO D: exactamente 1 match → revisamos sus warnings (aunque tenga 0)
+    user_id, data = matches[0]
+    key = f"{chat_id}:{user_id}"
+    current_warnings = warnings.get(key, 0)
+
+    nombre = data.get("full_name") or data.get("username") or "Este usuario"
+    text = f"{nombre} lleva {current_warnings}/{MAX_WARNINGS} advertencias."
+
+    msg = await message.reply_text(text)
+    if jq:
+        jq.run_once(
+            delete_message_later,
+            when=DELETE_AFTER_SECONDS,
+            data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+        )
 
 
 # ------------------ MANEJO DE LINKS ------------------
@@ -170,14 +273,21 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
     key = f"{chat_id}:{user_id}"
 
+    # Registrar usuario que manda el mensaje
+    register_user(chat_id, update.effective_user)
+
+    # Si es reply, registrar también al otro
+    if update.message.reply_to_message:
+        register_user(chat_id, update.message.reply_to_message.from_user)
+
     # Ignorar admins / creador
-    try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status in ["administrator", "creator"]:
-            return
-    except Exception as e:
-        print(f"Error en get_chat_member: {e}")
-        return
+    #try:
+     #   member = await context.bot.get_chat_member(chat_id, user_id)
+      #  if member.status in ["administrator", "creator"]:
+       #     return
+    #except Exception as e:
+     #   print(f"Error en get_chat_member: {e}")
+      #  return
 
     if contains_link(message):
         # 1) Intentar borrar el mensaje del usuario
