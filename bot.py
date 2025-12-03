@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import sys
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -15,7 +16,7 @@ from keep_alive import keep_alive
 if os.environ.get("REPL_ID"):
     keep_alive()
 
-# Si lo usas también fuera de Replit, esto mantiene vivo el bot
+# Si lo usas también fuera de Replit, esto mantiene vivo el bot (en Replit)
 keep_alive()
 
 # ------------------ CONFIG ------------------
@@ -23,7 +24,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]  # asegúrate de crearla en Secrets
 
 WARNINGS_FILE = "warnings.json"
 MAX_WARNINGS = 3
-DELETE_AFTER_SECONDS = 10  # 2 minutos
+DELETE_AFTER_SECONDS = 10  # segundos
 # -------------------------------------------
 
 # Inicializar bot
@@ -43,9 +44,16 @@ known_users = {}
 
 
 def save_warnings():
-    """Guarda el diccionario de advertencias en el archivo."""
-    with open(WARNINGS_FILE, "w") as f:
-        json.dump(warnings, f)
+    """Guarda el diccionario de advertencias en el archivo y muestra logs útiles."""
+    try:
+        with open(WARNINGS_FILE, "w") as f:
+            json.dump(warnings, f)
+            f.flush()
+            os.fsync(f.fileno())
+        print("WARNINGS GUARDADOS:", warnings)
+        print("Archivo warnings.json en:", os.path.abspath(WARNINGS_FILE))
+    except Exception as e:
+        print(f"Error guardando warnings: {e}", file=sys.stderr)
 
 
 def register_user(chat_id: str, user):
@@ -150,6 +158,12 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = str(update.effective_chat.id)
     message = update.message
 
+    # Borrar el mensaje del usuario inmediatamente
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     # Registrar al que ejecuta el comando
     if update.effective_user:
         register_user(chat_id, update.effective_user)
@@ -210,7 +224,6 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Varias coincidencias
     if len(matches) > 1:
-        # Si son demasiados, mejor pedir que acote
         if len(matches) > 5:
             msg_text = (
                 f"Encontré varios usuarios que coinciden con “{search}”.\n"
@@ -259,6 +272,187 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
+# ------------------ COMANDO /unwarn ------------------
+async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /unwarn (respondiendo a un mensaje) -> limpia warnings del usuario respondido
+    /unwarn nombre_o_username         -> limpia warnings del usuario encontrado por nombre
+    Solo admins/creador pueden usarlo.
+    """
+    jq = context.application.job_queue
+    chat_id = str(update.effective_chat.id)
+    message = update.message
+    user_id = str(update.effective_user.id)
+
+    # Borrar el comando del chat para no ensuciar
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Validar que quien lo usa sea admin/creador
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ["administrator", "creator"]:
+            msg = await context.bot.send_message(
+                chat_id,
+                "Solo admins pueden usar /unwarn."
+            )
+            if jq:
+                jq.run_once(
+                    delete_message_later,
+                    when=DELETE_AFTER_SECONDS,
+                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                )
+            return
+    except Exception as e:
+        print("Error en admin-check /unwarn:", e)
+        return
+
+    target_user_id = None
+    display_name = None
+
+    # Caso A: /unwarn como reply (sin argumentos)
+    if message.reply_to_message and not context.args:
+        target = message.reply_to_message.from_user
+        target_user_id = str(target.id)
+        display_name = target.first_name
+
+    # Caso B: /unwarn con texto (sin reply) -> buscar por nombre/usuario
+    else:
+        if not context.args:
+            msg = await context.bot.send_message(
+                chat_id,
+                "Usa /unwarn respondiendo al mensaje de alguien\n"
+                "o /unwarn nombre_o_usuario (ej. /unwarn @juanito o /unwarn juan)."
+            )
+            if jq:
+                jq.run_once(
+                    delete_message_later,
+                    when=DELETE_AFTER_SECONDS,
+                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                )
+            return
+
+        search = " ".join(context.args)
+        matches = find_users_in_chat_by_query(chat_id, search)
+
+        if not matches:
+            msg = await context.bot.send_message(
+                chat_id,
+                f"No encontré a nadie en este grupo que coincida con “{search}”."
+            )
+            if jq:
+                jq.run_once(
+                    delete_message_later,
+                    when=DELETE_AFTER_SECONDS,
+                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                )
+            return
+
+        if len(matches) > 1:
+            if len(matches) > 5:
+                msg_text = (
+                    f"Encontré varios usuarios que coinciden con “{search}”.\n"
+                    "Sé más específico (ej. nombre y apellido o username completo)."
+                )
+            else:
+                lista = []
+                for uid, data in matches:
+                    full_name = data.get("full_name") or "(sin nombre)"
+                    username = data.get("username")
+                    if username:
+                        lista.append(f"- {full_name} (@{username})")
+                    else:
+                        lista.append(f"- {full_name}")
+
+                msg_text = (
+                    "Encontré varios posibles:\n"
+                    + "\n".join(lista)
+                    + "\n\nPrueba con un nombre más específico o usa el username completo."
+                )
+
+            msg = await context.bot.send_message(chat_id, msg_text)
+            if jq:
+                jq.run_once(
+                    delete_message_later,
+                    when=DELETE_AFTER_SECONDS,
+                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                )
+            return
+
+        # Solo 1 match
+        target_user_id, data = matches[0]
+        display_name = data.get("full_name") or data.get("username") or "este usuario"
+
+    # Ya tenemos target_user_id y display_name -> limpiamos sus warnings
+    key = f"{chat_id}:{target_user_id}"
+
+    if key in warnings:
+        del warnings[key]
+        save_warnings()
+        result_text = f"🧹 Se limpiaron las advertencias de {display_name}."
+    else:
+        result_text = f"{display_name} no tiene advertencias registradas."
+
+    msg = await context.bot.send_message(chat_id, result_text)
+    if jq:
+        jq.run_once(
+            delete_message_later,
+            when=DELETE_AFTER_SECONDS,
+            data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+        )
+
+
+# ------------------ COMANDO /debugwarnings ------------------
+async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Muestra el contenido actual de warnings y la ruta del archivo.
+    Solo admins/creador pueden usarlo.
+    """
+    jq = context.application.job_queue
+    chat_id = str(update.effective_chat.id)
+    message = update.message
+    user_id = str(update.effective_user.id)
+
+    # No ensuciamos el chat con el comando
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Validar admin/creador
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ["administrator", "creator"]:
+            msg = await context.bot.send_message(
+                chat_id,
+                "Solo admins pueden usar /debugwarnings."
+            )
+            if jq:
+                jq.run_once(
+                    delete_message_later,
+                    when=DELETE_AFTER_SECONDS,
+                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                )
+            return
+    except Exception as e:
+        print("Error en admin-check /debugwarnings:", e)
+        return
+
+    from pprint import pformat
+    warnings_text = pformat(warnings, width=80)
+    file_path = os.path.abspath(WARNINGS_FILE)
+
+    texto = (
+        "🐛 DEBUG WARNINGS\n\n"
+        f"Archivo: `{file_path}`\n\n"
+        f"Contenido de warnings (dict en memoria):\n```{warnings_text}```"
+    )
+
+    await context.bot.send_message(chat_id, texto, parse_mode="Markdown")
+
+
 # ------------------ MANEJO DE LINKS ------------------
 async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -280,14 +474,14 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message:
         register_user(chat_id, update.message.reply_to_message.from_user)
 
-    # Ignorar admins / creador
-    #try:
-     #   member = await context.bot.get_chat_member(chat_id, user_id)
-      #  if member.status in ["administrator", "creator"]:
-       #     return
-    #except Exception as e:
-     #   print(f"Error en get_chat_member: {e}")
-      #  return
+    # Ignorar admins / creador (si quieres que no reciban warnings, descomenta esto)
+    # try:
+    #     member = await context.bot.get_chat_member(chat_id, user_id)
+    #     if member.status in ["administrator", "creator"]:
+    #         return
+    # except Exception as e:
+    #     print(f"Error en get_chat_member: {e}")
+    #     return
 
     if contains_link(message):
         # 1) Intentar borrar el mensaje del usuario
@@ -360,6 +554,8 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------ HANDLERS ------------------
 app.add_handler(CommandHandler("warnings", check_user_warnings))
+app.add_handler(CommandHandler("unwarn", unwarn))
+app.add_handler(CommandHandler("debugwarnings", debug_warnings))
 app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), check_links))
 
 # ---------------- RUN BOT -----------------
