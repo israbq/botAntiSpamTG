@@ -177,8 +177,8 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
         current_warnings = warnings.get(key, 0)
 
         text = (
-            f"{target_user.first_name} lleva "
-            f"{current_warnings}/{MAX_WARNINGS} advertencias."
+            f"{target_user.first_name} va "
+            f"{current_warnings} de {MAX_WARNINGS}. No me tientes 😌"
         )
         msg = await context.bot.send_message(chat_id, text)
 
@@ -391,7 +391,7 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if key in warnings:
         del warnings[key]
         save_warnings()
-        result_text = f"🧹 Se limpiaron las advertencias de {display_name}."
+        result_text = f"🧹 Limpio el historial de {display_name}. Como si nada hubiera pasado 😉"
     else:
         result_text = f"{display_name} no tiene advertencias registradas."
 
@@ -444,14 +444,22 @@ async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     warnings_text = pformat(warnings, width=80)
     file_path = os.path.abspath(WARNINGS_FILE)
 
-    texto = (
-        "🐛 DEBUG WARNINGS\n\n"
-        f"Archivo: `{file_path}`\n\n"
-        f"Contenido de warnings (dict en memoria):\n```{warnings_text}```"
+
+texto = (
+    "🐛 DEBUG DE ADVERTENCIAS\n\n"
+    f"Archivo donde se guardan las advertencias:\n`{file_path}`\n\n"
+    f"Advertencias registradas actualmente:\n```{warnings_text}```"
+)
+
+msg = await context.bot.send_message(chat_id, texto, parse_mode="Markdown")
+
+# programar borrado del mensaje de debug
+if jq:
+    jq.run_once(
+        delete_message_later,
+        when=DELETE_AFTER_SECONDS,
+        data={"chat_id": msg.chat_id, "message_id": msg.message_id},
     )
-
-    await context.bot.send_message(chat_id, texto, parse_mode="Markdown")
-
 
 # ------------------ MANEJO DE LINKS ------------------
 async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,9 +506,9 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 3) Avisar al usuario en el grupo
         warning_text = (
-            f"🚫 {update.effective_user.first_name}, no se permiten links de otros grupos.\n"
-            f"Vas {current_warnings}/{MAX_WARNINGS}. "
-            "A la tercera te saco, sin llorar 🙃"
+            f"🚫 {update.effective_user.first_name}, aquí no se permiten links de otros grupos.\n"
+            f"Llevas {current_warnings} de {MAX_WARNINGS}.\n"
+            "A la tercera pelas, eh 🙃"
         )
 
         warning_msg = None
@@ -531,9 +539,8 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_warnings()
 
                 kick_text = (
-                    f"{update.effective_user.first_name} ha sido expulsado "
-                    "por exceder el límite de advertencias por enviar enlaces "
-                    "prohibidos."
+                    f"{update.effective_user.first_name} llegó al límite. "
+                    "Se avisó y se cumplió 😇."
                 )
                 kick_msg = await context.bot.send_message(chat_id, kick_text)
 
