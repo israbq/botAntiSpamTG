@@ -147,7 +147,6 @@ async def delete_message_later(context: ContextTypes.DEFAULT_TYPE):
         # Si ya fue borrado o no hay permisos, no pasa nada
         print(f"Error al borrar mensaje programado: {e}")
 
-
 # ------------------ COMANDO /warnings ------------------
 async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -181,7 +180,7 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"{target_user.first_name} lleva "
             f"{current_warnings}/{MAX_WARNINGS} advertencias."
         )
-        msg = await message.reply_text(text)
+        msg = await context.bot.send_message(chat_id, text)
 
         if jq:
             jq.run_once(
@@ -193,7 +192,8 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # CASO B: /warnings sin args y sin reply -> explicar uso
     if not context.args:
-        msg = await message.reply_text(
+        msg = await context.bot.send_message(
+            chat_id,
             "Usa /warnings respondiendo al mensaje de alguien,\n"
             "o /warnings nombre/usuario (ej. /warnings juanito)."
         )
@@ -211,7 +211,8 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Nadie coincide → no existe “juanito” en el registro del bot
     if not matches:
-        msg = await message.reply_text(
+        msg = await context.bot.send_message(
+            chat_id,
             f"No encontré a nadie en este grupo que coincida con “{search}”."
         )
         if jq:
@@ -246,7 +247,7 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
                   "para ver sus advertencias."
             )
 
-        msg = await message.reply_text(msg_text)
+        msg = await context.bot.send_message(chat_id, msg_text)
         if jq:
             jq.run_once(
                 delete_message_later,
@@ -263,14 +264,13 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
     nombre = data.get("full_name") or data.get("username") or "Este usuario"
     text = f"{nombre} lleva {current_warnings}/{MAX_WARNINGS} advertencias."
 
-    msg = await message.reply_text(text)
+    msg = await context.bot.send_message(chat_id, text)
     if jq:
         jq.run_once(
             delete_message_later,
             when=DELETE_AFTER_SECONDS,
             data={"chat_id": msg.chat_id, "message_id": msg.message_id},
         )
-
 
 # ------------------ COMANDO /unwarn ------------------
 async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
