@@ -403,7 +403,6 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data={"chat_id": msg.chat_id, "message_id": msg.message_id},
         )
 
-
 # ------------------ COMANDO /debugwarnings ------------------
 async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -415,13 +414,13 @@ async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = str(update.effective_user.id)
 
-    # No ensuciamos el chat con el comando
+    # Borrar el comando para no ensuciar el chat
     try:
         await message.delete()
-    except Exception:
+    except:
         pass
 
-    # Validar admin/creador
+    # Validar admin
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status not in ["administrator", "creator"]:
@@ -440,26 +439,26 @@ async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Error en admin-check /debugwarnings:", e)
         return
 
+    # Construir texto
     from pprint import pformat
     warnings_text = pformat(warnings, width=80)
     file_path = os.path.abspath(WARNINGS_FILE)
 
-
-texto = (
-    "🐛 DEBUG DE ADVERTENCIAS\n\n"
-    f"Archivo donde se guardan las advertencias:\n`{file_path}`\n\n"
-    f"Advertencias registradas actualmente:\n```{warnings_text}```"
-)
-
-msg = await context.bot.send_message(chat_id, texto, parse_mode="Markdown")
-
-# programar borrado del mensaje de debug
-if jq:
-    jq.run_once(
-        delete_message_later,
-        when=DELETE_AFTER_SECONDS,
-        data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+    texto = (
+        "🐛 DEBUG DE ADVERTENCIAS\n\n"
+        f"Archivo donde se guardan las advertencias:\n`{file_path}`\n\n"
+        f"Esto es lo que tiene guardado el bot en este momento:\n```{warnings_text}```"
     )
+
+    # Enviar mensaje con autodestrucción
+    msg = await context.bot.send_message(chat_id, texto, parse_mode="Markdown")
+
+    if jq:
+        jq.run_once(
+            delete_message_later,
+            when=DELETE_AFTER_SECONDS,
+            data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+        )
 
 # ------------------ MANEJO DE LINKS ------------------
 async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
