@@ -16,15 +16,12 @@ from keep_alive import keep_alive
 if os.environ.get("REPL_ID"):
     keep_alive()
 
-# Si lo usas también fuera de Replit, esto mantiene vivo el bot (en Replit)
-keep_alive()
-
 # ------------------ CONFIG ------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # asegúrate de crearla en Secrets
 
 WARNINGS_FILE = "warnings.json"
 MAX_WARNINGS = 3
-DELETE_AFTER_SECONDS = 120  # segundos
+DELETE_AFTER_SECONDS = 120  # 2 minutos
 # -------------------------------------------
 
 # Inicializar bot
@@ -482,13 +479,13 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         register_user(chat_id, update.message.reply_to_message.from_user)
 
     # Ignorar admins / creador (si quieres que no reciban warnings, descomenta esto)
-     try:
-         member = await context.bot.get_chat_member(chat_id, user_id)
-         if member.status in ["administrator", "creator"]:
-             return
-     except Exception as e:
-         print(f"Error en get_chat_member: {e}")
-         return
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status in ["administrator", "creator"]:
+            return
+    except Exception as e:
+        print(f"Error en get_chat_member: {e}")
+        return
 
     if contains_link(message):
         # 1) Intentar borrar el mensaje del usuario
