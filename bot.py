@@ -262,7 +262,7 @@ async def check_user_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_warnings = warnings.get(key, 0)
 
     nombre = data.get("full_name") or data.get("username") or "Este usuario"
-    text = f"{nombre} lleva {current_warnings}/{MAX_WARNINGS} advertencias."
+    text = f"{nombre} trae {current_warnings} de {MAX_WARNINGS}… ojo ahí 👀"
 
     msg = await context.bot.send_message(chat_id, text)
     if jq:
@@ -507,7 +507,7 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         warning_text = (
             f"🚫 {update.effective_user.first_name}, aquí no se permiten links de otros grupos.\n"
             f"Llevas {current_warnings} de {MAX_WARNINGS}.\n"
-            "A la tercera pelas, eh 🙃"
+            "A la tercera vas pa' fuera, eh 🙃"
         )
 
         warning_msg = None
@@ -538,7 +538,7 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_warnings()
 
                 kick_text = (
-                    f"{update.effective_user.first_name} llegó al límite. "
+                    f"{update.effective_user.first_name} llegó al límite.\n\n"
                     "Se avisó y se cumplió 😇."
                 )
                 kick_msg = await context.bot.send_message(chat_id, kick_text)
