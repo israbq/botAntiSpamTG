@@ -12,6 +12,7 @@ from telegram.ext import (
 )
 from keep_alive import keep_alive
 
+
 # Levanta el mini servidor SOLO en Replit
 if os.environ.get("REPL_ID"):
     keep_alive()
@@ -26,6 +27,34 @@ DELETE_AFTER_SECONDS = 120  # 2 minutos
 
 # Inicializar bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+# <<< NUEVO: helper para detectar admin normal o anónimo
+async def es_admin_o_anon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    chat = update.effective_chat
+    msg = update.effective_message
+    user = update.effective_user
+
+    # Intentamos traer la lista de admins del chat
+    try:
+        admins = await context.bot.get_chat_administrators(chat.id)
+    except Exception as e:
+        print(f"Error obteniendo administradores: {e}", file=sys.stderr)
+        admins = []
+
+    admin_ids = {a.user.id for a in admins if a and a.user}
+
+    # Caso 1: user "normal" y es admin
+    if user and user.id in admin_ids:
+        return True
+
+    # Caso 2: mensaje enviado "en nombre del grupo" (admin anónimo)
+    # Cuando eres admin anónimo, el mensaje viene como sender_chat = grupo.
+    if msg and msg.sender_chat and msg.sender_chat.id == chat.id:
+        return True
+
+    return False
+# >>> FIN NUEVO
+
 
 # Cargar advertencias desde archivo
 try:
@@ -281,6 +310,10 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = str(update.effective_user.id)
 
+    # <<< NUEVO: precalcular si es admin normal o anónimo
+    es_admin = await es_admin_o_anon(update, context)
+    # >>> FIN NUEVO
+
     # Borrar el comando del chat para no ensuciar
     try:
         await message.delete()
@@ -290,7 +323,8 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Validar que quien lo usa sea admin/creador
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in ["administrator", "creator"]:
+        # <<< NUEVO: si no sale admin en get_chat_member, pero sí es admin anónimo, lo dejamos pasar
+        if member.status not in ["administrator", "creator"] and not es_admin:
             msg = await context.bot.send_message(
                 chat_id,
                 "Solo admins pueden usar /unwarn."
@@ -302,9 +336,14 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     data={"chat_id": msg.chat_id, "message_id": msg.message_id},
                 )
             return
+        # >>> FIN NUEVO
     except Exception as e:
         print("Error en admin-check /unwarn:", e)
-        return
+        # <<< NUEVO: fallback, si no podemos leer get_chat_member,
+        # pero sí es admin/anónimo según es_admin_o_anon, continuamos.
+        if not es_admin:
+            return
+        # >>> FIN NUEVO
 
     target_user_id = None
     display_name = None
