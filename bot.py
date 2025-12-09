@@ -28,13 +28,18 @@ DELETE_AFTER_SECONDS = 120  # 2 minutos
 # Inicializar bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# <<< NUEVO: helper para detectar admin normal o anónimo
+# ---------- HELPER: ADMIN NORMAL O ANÓNIMO ----------
 async def es_admin_o_anon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Devuelve True si el que manda el mensaje es:
+    - admin/creator "normal"
+    - o admin anónimo (mensaje enviado en nombre del grupo)
+    """
     chat = update.effective_chat
     msg = update.effective_message
     user = update.effective_user
 
-    # Intentamos traer la lista de admins del chat
+    # Lista de admins reales del chat
     try:
         admins = await context.bot.get_chat_administrators(chat.id)
     except Exception as e:
@@ -43,17 +48,15 @@ async def es_admin_o_anon(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     admin_ids = {a.user.id for a in admins if a and a.user}
 
-    # Caso 1: user "normal" y es admin
+    # Caso 1: usuario visible y admin normal
     if user and user.id in admin_ids:
         return True
 
-    # Caso 2: mensaje enviado "en nombre del grupo" (admin anónimo)
-    # Cuando eres admin anónimo, el mensaje viene como sender_chat = grupo.
+    # Caso 2: mensaje enviado "como el grupo" (admin anónimo)
     if msg and msg.sender_chat and msg.sender_chat.id == chat.id:
         return True
 
     return False
-# >>> FIN NUEVO
 
 
 # Cargar advertencias desde archivo
@@ -308,11 +311,11 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jq = context.application.job_queue
     chat_id = str(update.effective_chat.id)
     message = update.message
-    user_id = str(update.effective_user.id)
+    user = update.effective_user
+    user_id = str(user.id) if user else None
 
-    # <<< NUEVO: precalcular si es admin normal o anónimo
+    # Checar admin normal o anónimo
     es_admin = await es_admin_o_anon(update, context)
-    # >>> FIN NUEVO
 
     # Borrar el comando del chat para no ensuciar
     try:
@@ -320,30 +323,40 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # Validar que quien lo usa sea admin/creador
+    # Validar que quien lo usa sea admin/creador o admin anónimo
     try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        # <<< NUEVO: si no sale admin en get_chat_member, pero sí es admin anónimo, lo dejamos pasar
-        if member.status not in ["administrator", "creator"] and not es_admin:
-            msg = await context.bot.send_message(
-                chat_id,
-                "Solo admins pueden usar /unwarn."
-            )
-            if jq:
-                jq.run_once(
-                    delete_message_later,
-                    when=DELETE_AFTER_SECONDS,
-                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+        if user_id is not None:
+            member = await context.bot.get_chat_member(chat_id, user_id)
+            if member.status not in ["administrator", "creator"] and not es_admin:
+                msg = await context.bot.send_message(
+                    chat_id,
+                    "Solo admins pueden usar /unwarn."
                 )
-            return
-        # >>> FIN NUEVO
+                if jq:
+                    jq.run_once(
+                        delete_message_later,
+                        when=DELETE_AFTER_SECONDS,
+                        data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                    )
+                return
+        else:
+            # No hay user_id (casos muy raros). Si tampoco es admin anónimo, lo cortamos.
+            if not es_admin:
+                msg = await context.bot.send_message(
+                    chat_id,
+                    "Solo admins pueden usar /unwarn."
+                )
+                if jq:
+                    jq.run_once(
+                        delete_message_later,
+                        when=DELETE_AFTER_SECONDS,
+                        data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                    )
+                return
     except Exception as e:
         print("Error en admin-check /unwarn:", e)
-        # <<< NUEVO: fallback, si no podemos leer get_chat_member,
-        # pero sí es admin/anónimo según es_admin_o_anon, continuamos.
         if not es_admin:
             return
-        # >>> FIN NUEVO
 
     target_user_id = None
     display_name = None
@@ -448,7 +461,8 @@ async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jq = context.application.job_queue
     chat_id = str(update.effective_chat.id)
     message = update.message
-    user_id = str(update.effective_user.id)
+    user = update.effective_user
+    user_id = str(user.id) if user else None
 
     # Borrar el comando para no ensuciar el chat
     try:
@@ -456,24 +470,42 @@ async def debug_warnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+    # Detectar admin normal o anónimo
+    es_admin = await es_admin_o_anon(update, context)
+
     # Validar admin
     try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in ["administrator", "creator"]:
-            msg = await context.bot.send_message(
-                chat_id,
-                "Solo admins pueden usar /debugwarnings."
-            )
-            if jq:
-                jq.run_once(
-                    delete_message_later,
-                    when=DELETE_AFTER_SECONDS,
-                    data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+        if user_id is not None:
+            member = await context.bot.get_chat_member(chat_id, user_id)
+            if member.status not in ["administrator", "creator"] and not es_admin:
+                msg = await context.bot.send_message(
+                    chat_id,
+                    "Solo admins pueden usar /debugwarnings."
                 )
-            return
+                if jq:
+                    jq.run_once(
+                        delete_message_later,
+                        when=DELETE_AFTER_SECONDS,
+                        data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                    )
+                return
+        else:
+            if not es_admin:
+                msg = await context.bot.send_message(
+                    chat_id,
+                    "Solo admins pueden usar /debugwarnings."
+                )
+                if jq:
+                    jq.run_once(
+                        delete_message_later,
+                        when=DELETE_AFTER_SECONDS,
+                        data={"chat_id": msg.chat_id, "message_id": msg.message_id},
+                    )
+                return
     except Exception as e:
         print("Error en admin-check /debugwarnings:", e)
-        return
+        if not es_admin:
+            return
 
     # Construir texto
     from pprint import pformat
@@ -506,6 +538,16 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = str(update.effective_chat.id)
+
+    # Si es admin normal o anónimo, ignorar (no dar warnings)
+    es_admin = await es_admin_o_anon(update, context)
+    if es_admin:
+        return
+
+    # A partir de aquí asumimos usuario "normal"
+    if not update.effective_user:
+        return
+
     user_id = str(update.effective_user.id)
     message = update.message.text
     key = f"{chat_id}:{user_id}"
@@ -517,7 +559,7 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message:
         register_user(chat_id, update.message.reply_to_message.from_user)
 
-    # Ignorar admins / creador (si quieres que no reciban warnings, descomenta esto)
+    # Ignorar admins / creador (doble seguro, por si acaso)
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status in ["administrator", "creator"]:
@@ -586,8 +628,7 @@ async def check_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         when=DELETE_AFTER_SECONDS,
                         data={
                             "chat_id": kick_msg.chat_id,
-                            "message_id": kick_msg.message_id,
-                        },
+                            "message_id": kick_msg.message_id},
                     )
 
             except Exception as e:
