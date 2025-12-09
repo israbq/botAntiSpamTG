@@ -20,7 +20,8 @@ if os.environ.get("REPL_ID"):
 # ------------------ CONFIG ------------------
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # asegúrate de crearla en Secrets
 
-WARNINGS_FILE = "warnings.json"
+KNOWN_USERS_FILE = "/data/known_users.json"
+WARNINGS_FILE = "/data/warnings.json"
 MAX_WARNINGS = 3
 DELETE_AFTER_SECONDS = 120  # 2 minutos
 # -------------------------------------------
@@ -59,28 +60,63 @@ async def es_admin_o_anon(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return False
 
 
-# Cargar advertencias desde archivo
+# ------------------ CARGA DE WARNINGS ------------------
 try:
     with open(WARNINGS_FILE, "r") as f:
         content = f.read().strip()
         warnings = json.loads(content) if content else {}
 except FileNotFoundError:
     warnings = {}
+    try:
+        os.makedirs(os.path.dirname(WARNINGS_FILE), exist_ok=True)
+        with open(WARNINGS_FILE, "w") as f:
+            json.dump(warnings, f)
+    except Exception as e:
+        print(f"Error creando {WARNINGS_FILE}: {e}", file=sys.stderr)
 
-# Registro de usuarios conocidos por chat
-# key: "chat_id:user_id" -> {"full_name": str, "username": str, "user_id": str}
-known_users = {}
+
+# ------------------ CARGA DE KNOWN_USERS ------------------
+try:
+    with open(KNOWN_USERS_FILE, "r") as f:
+        content = f.read().strip()
+        known_users = json.loads(content) if content else {}
+except FileNotFoundError:
+    known_users = {}
+    try:
+        os.makedirs(os.path.dirname(KNOWN_USERS_FILE), exist_ok=True)
+        with open(KNOWN_USERS_FILE, "w") as f:
+            json.dump(known_users, f)
+    except Exception as e:
+        print(f"Error creando {KNOWN_USERS_FILE}: {e}", file=sys.stderr)
+
+
+def save_known_users():
+    """Guarda el diccionario known_users en el archivo persistente (/data/known_users.json)."""
+    try:
+        os.makedirs(os.path.dirname(KNOWN_USERS_FILE), exist_ok=True)
+        with open(KNOWN_USERS_FILE, "w") as f:
+            json.dump(known_users, f)
+            f.flush()
+            os.fsync(f.fileno())
+        print("KNOWN_USERS GUARDADOS:", known_users)
+    except Exception as e:
+        print(f"Error guardando known_users: {e}", file=sys.stderr)
 
 
 def save_warnings():
-    """Guarda el diccionario de advertencias en el archivo y muestra logs útiles."""
+    """Guarda el diccionario de advertencias en el archivo (persistente en /data)."""
     try:
+        # Asegurar que el directorio exista
+        os.makedirs(os.path.dirname(WARNINGS_FILE), exist_ok=True)
+
         with open(WARNINGS_FILE, "w") as f:
             json.dump(warnings, f)
             f.flush()
             os.fsync(f.fileno())
+
         print("WARNINGS GUARDADOS:", warnings)
-        print("Archivo warnings.json en:", os.path.abspath(WARNINGS_FILE))
+        print("Archivo guardado en:", os.path.abspath(WARNINGS_FILE))
+
     except Exception as e:
         print(f"Error guardando warnings: {e}", file=sys.stderr)
 
@@ -103,6 +139,10 @@ def register_user(chat_id: str, user):
         "username": username,
         "user_id": str(user.id),
     }
+
+    # Guardar cambios en disco
+    save_known_users()
+
 
 
 def find_users_in_chat_by_query(chat_id: str, query: str):
